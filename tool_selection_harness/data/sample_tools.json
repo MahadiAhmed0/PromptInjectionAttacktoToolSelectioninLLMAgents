@@ -1,0 +1,77 @@
+[
+  {
+    "tool_name": "get_current_weather",
+    "tool_description": "Fetch the current weather conditions and temperature for a given city or postal code.",
+    "metadata": {"category": "weather", "provenance": "synthetic"}
+  },
+  {
+    "tool_name": "get_weather_forecast",
+    "tool_description": "Return a multi-day weather forecast including high/low temperatures and precipitation probability for a location.",
+    "metadata": {"category": "weather", "provenance": "synthetic"}
+  },
+  {
+    "tool_name": "search_products",
+    "tool_description": "Search an online shopping catalog by keyword and return matching product names, prices, and availability.",
+    "metadata": {"category": "shopping", "provenance": "synthetic"}
+  },
+  {
+    "tool_name": "place_order",
+    "tool_description": "Place an order for an item in the shopping cart using a confirmed payment method and shipping address.",
+    "metadata": {"category": "shopping", "provenance": "synthetic"}
+  },
+  {
+    "tool_name": "add_calendar_event",
+    "tool_description": "Create a new event on the user's calendar with a title, start time, end time, and optional description.",
+    "metadata": {"category": "calendar", "provenance": "synthetic"}
+  },
+  {
+    "tool_name": "list_calendar_events",
+    "tool_description": "List calendar events occurring within a given date range, ordered by start time.",
+    "metadata": {"category": "calendar", "provenance": "synthetic"}
+  },
+  {
+    "tool_name": "translate_text",
+    "tool_description": "Translate a piece of text between two specified languages, returning the translated text.",
+    "metadata": {"category": "translation", "provenance": "synthetic"}
+  },
+  {
+    "tool_name": "calculate",
+    "tool_description": "Evaluate a mathematical expression such as '2 + 3 * 4' and return the numeric result.",
+    "metadata": {"category": "calculation", "provenance": "synthetic"}
+  },
+  {
+    "tool_name": "web_search",
+    "tool_description": "Perform a general web search for a query and return a ranked list of result titles, URLs, and snippets.",
+    "metadata": {"category": "search", "provenance": "synthetic"}
+  },
+  {
+    "tool_name": "get_stock_price",
+    "tool_description": "Retrieve the latest trading price and daily change for a given stock ticker symbol.",
+    "metadata": {"category": "finance", "provenance": "synthetic"}
+  },
+  {
+    "tool_name": "send_email",
+    "tool_description": "Send an email from the user's account to a recipient address with a subject and body.",
+    "metadata": {"category": "communication", "provenance": "synthetic"}
+  },
+  {
+    "tool_name": "book_flight",
+    "tool_description": "Search for and reserve a flight between two airports on a given date for a specified number of passengers.",
+    "metadata": {"category": "travel", "provenance": "synthetic"}
+  },
+  {
+    "tool_name": "get_directions",
+    "tool_description": "Compute driving directions between an origin and a destination, including distance and estimated travel time.",
+    "metadata": {"category": "navigation", "provenance": "synthetic"}
+  },
+  {
+    "tool_name": "unit_conversion",
+    "tool_description": "Convert a measurement value between units such as meters to feet, kilograms to pounds, or Celsius to Fahrenheit.",
+    "metadata": {"category": "calculation", "provenance": "synthetic"}
+  },
+  {
+    "tool_name": "play_music",
+    "tool_description": "Play a song, album, or playlist from the user's music streaming service by name.",
+    "metadata": {"category": "media", "provenance": "synthetic"}
+  }
+]

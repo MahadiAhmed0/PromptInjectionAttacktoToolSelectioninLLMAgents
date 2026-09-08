@@ -1,4 +1,4 @@
-﻿"""Tool-selection robustness evaluation harness.
+"""Tool-selection robustness evaluation harness.
 
 This package provides data structures and utilities for *benchmarking* how
 robustly LLM agents select among documented tools when the tool registry may

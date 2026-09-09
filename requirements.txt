@@ -1,0 +1,10 @@
+numpy>=1.24
+sentence-transformers>=2.2
+streamlit>=1.36
+plotly>=5.18
+
+# Optional backends:
+# transformers>=4.40   # PerplexityDetector (detection tab)
+# torch>=2.0           # required by transformers
+# openai>=1.30         # OpenAI LLM backend (sidebar provider)
+# anthropic>=0.28      # Anthropic LLM backend (sidebar provider)

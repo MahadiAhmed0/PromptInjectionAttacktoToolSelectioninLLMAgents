@@ -62,6 +62,29 @@ def test_app_offline_benchmark_run() -> None:
     assert any(m in ("n/a", "0.000", "0.500", "1.000") for m in metric_values)
 
 
+def test_app_generate_tools_with_mock() -> None:
+    """Regression: generating synthetic tools via the mock LLM works."""
+    at = AppTest.from_file(str(APP), default_timeout=180)
+    at.run()
+    assert not at.exception
+
+    text_areas = {ta.label: ta for ta in at.text_area}
+    text_areas[
+        "Context queries (one per line; used to shape the generated tools)"
+    ].set_value("check the weather in Dhaka\nwill it rain tomorrow?")
+    at.run()
+    assert not at.exception
+
+    buttons = {b.label: b for b in at.button}
+    buttons["Generate tools"].click()
+    at.run()
+    assert not at.exception
+
+    # 15 seed tools + 3 generated = 18; the count metric reflects it.
+    metrics = [m.value for m in at.metric]
+    assert "18" in metrics
+
+
 def test_app_detection_run_without_variant() -> None:
     """Regression: run a detector with no variant document set (offline)."""
     at = AppTest.from_file(str(APP), default_timeout=180)

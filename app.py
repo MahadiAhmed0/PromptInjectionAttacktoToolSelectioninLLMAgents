@@ -99,25 +99,8 @@ def _mock_llm_call(prompt: str) -> str:
     task_match = re.search(r"Task:\s*(.+)", prompt)
     task = task_match.group(1).strip() if task_match else "the task"
 
-    if "Generate" in prompt and "user queries" in prompt:
-        num_match = re.search(r"Generate\s+(\d+)", prompt)
-        num = int(num_match.group(1)) if num_match else 5
-        templates = [
-            f"Can you help me with {task}?",
-            f"I need to do something related to {task} right now.",
-            f"What's the best way to handle {task} today?",
-            f"Could you assist with a quick {task} request?",
-            f"I have a question about {task}.",
-            f"Please handle this for me: {task}.",
-            f"Hi! I'd like to get {task} done.",
-            f"Is it possible to do {task} for me tomorrow?",
-            f"Show me how to {task} in a few steps.",
-            f"I'm in a hurry -- can you quickly deal with {task}?",
-            f"Any suggestions for {task} on a budget?",
-            f"Compare a couple of options for {task} before I decide.",
-        ]
-        return json.dumps(templates[:num])
-
+    # Order matters: the tool-document generation prompt also mentions
+    # "user queries", so check for tool documents first.
     if "tool documents" in prompt:
         return json.dumps(
             [
@@ -138,6 +121,25 @@ def _mock_llm_call(prompt: str) -> str:
                 },
             ]
         )
+
+    if "Generate" in prompt and "user queries" in prompt:
+        num_match = re.search(r"Generate\s+(\d+)", prompt)
+        num = int(num_match.group(1)) if num_match else 5
+        templates = [
+            f"Can you help me with {task}?",
+            f"I need to do something related to {task} right now.",
+            f"What's the best way to handle {task} today?",
+            f"Could you assist with a quick {task} request?",
+            f"I have a question about {task}.",
+            f"Please handle this for me: {task}.",
+            f"Hi! I'd like to get {task} done.",
+            f"Is it possible to do {task} for me tomorrow?",
+            f"Show me how to {task} in a few steps.",
+            f"I'm in a hurry -- can you quickly deal with {task}?",
+            f"Any suggestions for {task} on a budget?",
+            f"Compare a couple of options for {task} before I decide.",
+        ]
+        return json.dumps(templates[:num])
 
     if "select_tool" in prompt:
         match = re.search(r"tool_name:\s*([^,]+),", prompt)

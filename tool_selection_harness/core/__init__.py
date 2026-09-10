@@ -7,11 +7,15 @@ agents, not to generate or facilitate attacks.
 
 from tool_selection_harness.core.defenses import (
     Detector,
+    KnownAnswerDetector,
     PerplexityDetector,
+    PerplexityWindowedDetector,
     ThresholdClassifier,
 )
 from tool_selection_harness.core.detection_metrics import (
     confusion_counts,
+    detection_auc,
+    evaluate_detector,
     false_negative_rate,
     false_positive_rate,
 )
@@ -46,8 +50,12 @@ __all__ = [
     "BenchmarkRunner",
     "Detector",
     "PerplexityDetector",
+    "PerplexityWindowedDetector",
+    "KnownAnswerDetector",
     "ThresholdClassifier",
     "confusion_counts",
     "false_positive_rate",
     "false_negative_rate",
+    "detection_auc",
+    "evaluate_detector",
 ]

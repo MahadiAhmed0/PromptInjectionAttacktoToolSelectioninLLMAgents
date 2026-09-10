@@ -439,16 +439,19 @@ class GradientSelectionOptimizer:
             current[suffix_start:suffix_end], skip_special_tokens=True
         )
 
-
 class GradientRetrievalOptimizer:
     """HotFlip-style token optimization of R (paper Eq. 6).
 
     Maximizes the mean cosine similarity between the embedded candidate
     text and embedded shadow queries via token-level flips, using the
     gradient of a differentiable embedder. The embedder is injected as
-    ``embed_ids`` (a callable mapping token-id lists to a differentiable
-    tensor), keeping this optimizer backend-agnostic and unit-testable.
+    ``embed_ids``: a callable mapping token-id lists (or tensors) to a
+    ``(pooled_vector, input_embeddings)`` pair, where ``input_embeddings``
+    is the per-token embedding tensor that carries the gradient used for
+    HotFlip candidate scoring. This keeps the optimizer backend-agnostic
+    and unit-testable.
     """
+
     def __init__(
         self,
         embed_ids: Callable[[List[int]], object],
@@ -482,13 +485,17 @@ class GradientRetrievalOptimizer:
         if not query_ids:
             raise ValueError("queries must not be empty")
 
-        def pooled_vector(ids_tensor):
-            return F.normalize(self.embed_ids(ids_tensor), dim=-1).mean(dim=1)
+        def pooled_of(ids_tensor):
+            pooled, _ = self.embed_ids(ids_tensor)
+            return pooled
 
-        query_vecs = [pooled_vector(ids).detach() for ids in query_ids]
+        query_vecs = [
+            F.normalize(pooled_of(ids).detach(), dim=-1)
+            for ids in query_ids
+        ]
 
-        def loss_from_output(vector_tensor):
-            normalized = F.normalize(vector_tensor, dim=-1).mean(dim=1)
+        def loss_from_pooled(pooled_tensor):
+            normalized = F.normalize(pooled_tensor, dim=-1)
             sims = torch.stack(
                 [
                     F.cosine_similarity(normalized, qv, dim=-1)
@@ -498,20 +505,19 @@ class GradientRetrievalOptimizer:
             return -sims.mean()
 
         def loss_of(seq_ids):
-            return float(
-                loss_from_output(self.embed_ids(seq_ids)).detach().item()
-            )
+            pooled, _ = self.embed_ids(seq_ids)
+            return float(loss_from_pooled(pooled).detach().item())
 
         current = self.tokenize(initial_text)
         current_loss = loss_of(torch.tensor([current], dtype=torch.long))
 
         for _ in range(iterations):
             ids_t = torch.tensor([current], dtype=torch.long)
-            output = self.embed_ids(ids_t)
-            output.retain_grad()
-            loss = loss_from_output(output)
+            pooled, input_embeds = self.embed_ids(ids_t)
+            input_embeds.retain_grad()
+            loss = loss_from_pooled(pooled)
             loss.backward()
-            grads = output.grad
+            grads = input_embeds.grad
             if grads is None:  # pragma: no cover - defensive
                 break
 
@@ -542,9 +548,10 @@ class GradientRetrievalOptimizer:
 class MiniLMDiffEmbedder:
     """Best-effort differentiable adapter for sentence-transformers MiniLM.
 
-    Exposes ``embed_ids`` / ``tokenize`` / ``decode`` so
-    :class:`GradientRetrievalOptimizer` can perform token-level HotFlip
-    optimization of R against a local MiniLM model (paper Eq. 6).
+    ``embed_ids`` returns ``(pooled_vector, input_embeddings)``: the
+    mean-pooled last hidden state and the per-token input embeddings that
+    carry gradients for :class:`GradientRetrievalOptimizer` (paper Eq. 6).
+    Handles list or tensor token ids and follows the model's device.
 
     Note: internal attribute paths vary across sentence-transformers
     versions; if the expected structure is not found, a RuntimeError
@@ -567,17 +574,28 @@ class MiniLMDiffEmbedder:
                 "sentence-transformers version; supply a custom embedder "
                 "to GradientRetrievalOptimizer instead."
             )
-        embeddings = auto_model.get_input_embeddings()
         self.auto_model = auto_model
-        self.word_embeddings = embeddings.weight.detach()
+        self._word_embeddings = auto_model.get_input_embeddings()
+        self.word_embeddings = self._word_embeddings.weight.detach()
         self.vocab_size = self.word_embeddings.shape[0]
 
     def embed_ids(self, ids: List[int]):
-        """Mean-pooled last hidden state with gradients enabled."""
+        """Return ``(mean_pooled_hidden, per_token_input_embeddings)``.
+
+        Accepts either a plain list of token ids or a tensor (any batch
+        shape is flattened to a single sequence). Token ids are placed on
+        the model's device (sentence-transformers may auto-load onto CUDA).
+        """
         torch = _torch()
-        ids_t = torch.tensor(ids, dtype=torch.long)
-        outputs = self.auto_model(input_ids=ids_t.unsqueeze(0))
-        return outputs.last_hidden_state.mean(dim=1)
+        if isinstance(ids, torch.Tensor):
+            ids = ids.reshape(-1).tolist()
+        device = next(self.auto_model.parameters()).device
+        ids_t = torch.tensor([list(ids)], dtype=torch.long, device=device)
+        input_embeds = self._word_embeddings(ids_t)
+        input_embeds = input_embeds.detach().requires_grad_(True)
+        outputs = self.auto_model(inputs_embeds=input_embeds)
+        pooled = outputs.last_hidden_state.mean(dim=1)
+        return pooled, input_embeds
 
     def tokenize(self, text: str) -> List[int]:
         return self.tokenizer(text, add_special_tokens=False)["input_ids"]

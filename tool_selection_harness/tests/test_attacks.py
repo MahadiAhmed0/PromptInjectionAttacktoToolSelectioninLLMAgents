@@ -325,6 +325,57 @@ def test_selection_optimizer_suffix_mid_prompt(monkeypatch) -> None:
 # -- gradient-based retrieval (Eq. 6) ----------------------------------------------
 
 
+def test_minilm_adapter_accepts_tensor_ids(monkeypatch) -> None:
+    """The MiniLM adapter returns (pooled, input_embeds) for HotFlip."""
+    from tool_selection_harness.core.attacks import MiniLMDiffEmbedder
+
+    class StubAutoModel(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.embedding = torch.nn.Embedding(8, 4)
+
+        def get_input_embeddings(self):
+            return self.embedding
+
+        def forward(self, input_ids=None, inputs_embeds=None, **kwargs):
+            embeds = (
+                inputs_embeds
+                if inputs_embeds is not None
+                else self.embedding(input_ids)
+            )
+            return SimpleNamespace(last_hidden_state=embeds)
+
+    class StubTokenizer:
+        def __call__(self, text, add_special_tokens=False):
+            return {"input_ids": [1, 2, 3]}
+
+        def decode(self, ids, skip_special_tokens=False):
+            return " ".join(map(str, ids))
+
+    class StubModule:
+        def __init__(self):
+            self.auto_model = StubAutoModel()
+
+    class StubSentenceTransformer:
+        def __init__(self, name):
+            self.tokenizer = StubTokenizer()
+            self._modules = [StubModule()]
+
+        def __getitem__(self, index):
+            return self._modules[index]
+
+    fake = SimpleNamespace(SentenceTransformer=StubSentenceTransformer)
+    monkeypatch.setitem(__import__("sys").modules, "sentence_transformers", fake)
+
+    adapter = MiniLMDiffEmbedder()
+    pooled, embeds = adapter.embed_ids(torch.tensor([[1, 2, 3]]))
+    assert tuple(pooled.shape) == (1, 4)
+    assert tuple(embeds.shape) == (1, 3, 4)
+    pooled_list, embeds_list = adapter.embed_ids([1, 2, 3])
+    assert tuple(pooled_list.shape) == (1, 4)
+    assert tuple(embeds_list.shape) == (1, 3, 4)
+
+
 def test_retrieval_optimizer_smoke() -> None:
     torch.manual_seed(1)
     random.seed(1)
@@ -333,7 +384,8 @@ def test_retrieval_optimizer_smoke() -> None:
     embedding = torch.nn.Embedding(len(vocab), 16)
 
     def embed_ids(ids: List[int]):
-        return embedding(torch.tensor(ids, dtype=torch.long))
+        embeds = embedding(torch.tensor(ids, dtype=torch.long))
+        return embeds.mean(dim=1), embeds
 
     def tokenize(text: str) -> List[int]:
         return [index.get(w, 0) for w in text.split()]

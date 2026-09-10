@@ -176,8 +176,11 @@ def _mock_llm_call(prompt: str) -> str:
                 entries.append((match.group(1).strip(), match.group(2).strip()))
         if not entries:
             return "I'm sorry, but I cannot assist with that request."
+        # Mild instruction resistance, mimicking a real LLM: only the
+        # optimized "Always prefer ... for ALL" phrasing (paper Fig. 1)
+        # overrides normal greedy selection; bare "Just output" does not.
         for name, desc in entries:
-            if "Always prefer" in desc or "Just output" in desc:
+            if "Always prefer" in desc:
                 return json.dumps({"select_tool": name})
         return json.dumps({"select_tool": entries[0][0]})
 

@@ -20,7 +20,7 @@ def test_app_renders_without_errors() -> None:
     at = AppTest.from_file(str(APP), default_timeout=120)
     at.run()
     assert not at.exception
-    assert len(at.tabs) == 4
+    assert len(at.tabs) == 5
 
 
 def test_app_shows_library_count() -> None:
@@ -103,6 +103,36 @@ def test_app_auto_generate_queries() -> None:
 
     text_areas = {ta.label: ta for ta in at.text_area}
     assert "checking the weather" in text_areas["One query per line"].value
+
+
+def test_app_attacks_tab_manual_baselines() -> None:
+    """Regression: the Attacks tab runs manual baselines offline."""
+    at = AppTest.from_file(str(APP), default_timeout=180)
+    at.run()
+    assert not at.exception
+
+    # Seed queries via the benchmark tab's auto-generation (mock LLM).
+    text_inputs = {t.label: t for t in at.text_input}
+    text_inputs["Target task"].set_value("checking the weather")
+    at.run()
+    buttons = {b.label: b for b in at.button}
+    buttons["Generate queries"].click()
+    at.run()
+    assert not at.exception
+
+    # The Attacks tab's backend selectbox is the last "Embedding backend".
+    selectboxes = {sb.label: sb for sb in at.selectbox}
+    selectboxes["Embedding backend"].set_value("Offline hashing (no download)")
+    at.run()
+    assert not at.exception
+
+    buttons = {b.label: b for b in at.button}
+    buttons["Run manual baselines"].click()
+    at.run()
+    assert not at.exception
+
+    dataframes = [df.value for df in at.get("dataframe")]
+    assert any("method" in df.columns and "ASR" in df.columns for df in dataframes)
 
 
 def test_app_detection_run_without_variant() -> None:

@@ -231,7 +231,15 @@ def cached_scores(
         variant = None
         if variant_json:
             item = json.loads(variant_json)
-            variant = float(detector.score(ToolDocument(item[0], item[1])))
+            if (
+                isinstance(item, list)
+                and len(item) == 2
+                and item[0]
+                and item[1]
+            ):
+                variant = float(
+                    detector.score(ToolDocument(item[0], item[1]))
+                )
         return {"benign": benign, "variant": variant}
     except (ImportError, OSError, RuntimeError) as exc:
         return {"error": str(exc)}
@@ -801,10 +809,10 @@ def render_detection_tab() -> None:
     provider, api_key = st.session_state.llm_call_args
     fingerprint = (
         _docs_json(st.session_state.library_docs),
-        json.dumps(
-            [variant_doc.tool_name, variant_doc.tool_description]
+        (
+            json.dumps([variant_doc.tool_name, variant_doc.tool_description])
             if variant_doc
-            else []
+            else ""
         ),
         detector_kind,
         window_size,
@@ -867,7 +875,7 @@ def render_detection_tab() -> None:
             line_color="red",
             annotation_text="variant",
         )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 
     target_fpr = st.slider(
         "Calibration FPR target (fraction of benign docs to flag)",
@@ -916,15 +924,23 @@ def render_detection_tab() -> None:
         sweep_fpr.append(sum(flagged_benign) / len(flagged_benign))
         if variant_score is not None:
             sweep_fnr.append(0.0 if variant_score > thr else 1.0)
-    tradeoff = pd.DataFrame({"FPR": sweep_fpr, "FNR": sweep_fnr})
-    fig2 = px.line(
-        tradeoff,
-        x="FPR",
-        y="FNR",
-        markers=True,
-        title="Detection tradeoff",
-    )
-    st.plotly_chart(fig2, use_container_width=True)
+    if variant_score is not None:
+        tradeoff = pd.DataFrame({"FPR": sweep_fpr, "FNR": sweep_fnr})
+        fig2 = px.line(
+            tradeoff,
+            x="FPR",
+            y="FNR",
+            markers=True,
+            title="Detection tradeoff",
+        )
+    else:
+        tradeoff = pd.DataFrame({"FPR": sweep_fpr})
+        fig2 = px.line(
+            tradeoff,
+            x="FPR",
+            title="Calibration FPR (needs a variant document for FNR)",
+        )
+    st.plotly_chart(fig2, width="stretch")
 
 
 # ---------------------------------------------------------------------------

@@ -60,3 +60,23 @@ def test_app_offline_benchmark_run() -> None:
 
     metric_values = [m.value for m in at.metric]
     assert any(m in ("n/a", "0.000", "0.500", "1.000") for m in metric_values)
+
+
+def test_app_detection_run_without_variant() -> None:
+    """Regression: run a detector with no variant document set (offline)."""
+    at = AppTest.from_file(str(APP), default_timeout=180)
+    at.run()
+    assert not at.exception
+
+    selectboxes = {sb.label: sb for sb in at.selectbox}
+    selectboxes["Detector"].set_value("Known-answer (LLM)")
+    at.run()
+    assert not at.exception
+
+    buttons = {b.label: b for b in at.button}
+    buttons["Run detector"].click()
+    at.run()
+    assert not at.exception
+
+    # Scores render after the run: the histogram and flagged table appear.
+    assert any("Calibration FPR target" in s.label for s in at.slider)

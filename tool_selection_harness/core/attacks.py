@@ -329,6 +329,7 @@ class GradientSelectionOptimizer:
                 ) from exc
             self._tokenizer = AutoTokenizer.from_pretrained(self.model_name)
             self._model = AutoModelForCausalLM.from_pretrained(self.model_name)
+            self._model = self._model.to(self.device)
             self._model.eval()
         return self._tokenizer, self._model
 

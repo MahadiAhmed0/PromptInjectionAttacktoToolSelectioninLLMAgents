@@ -32,7 +32,12 @@ from tool_selection_harness.core import (
     false_negative_rate,
     false_positive_rate,
 )
-from tool_selection_harness.core.defenses import PerplexityDetector, ThresholdClassifier
+from tool_selection_harness.core.defenses import (
+    KnownAnswerDetector,
+    PerplexityDetector,
+    PerplexityWindowedDetector,
+    ThresholdClassifier,
+)
 from tool_selection_harness.core.generators import (
     generate_task_descriptions,
     generate_tool_documents,
@@ -76,6 +81,13 @@ def get_retriever(backend: str) -> Retriever:
 def load_detector() -> PerplexityDetector:
     """gpt2-based perplexity detector (lazy model download on first score)."""
     return PerplexityDetector()
+
+
+DETECTOR_KINDS = (
+    "PPL (mean NLL)",
+    "PPL-W (windowed NLL)",
+    "Known-answer (LLM)",
+)
 
 
 def _mock_llm_call(prompt: str) -> str:
@@ -194,12 +206,24 @@ def cached_top_k(
     return json.dumps(rows)
 
 
-@st.cache_data(show_spinner="Scoring documents with the perplexity detector...")
-def cached_scores(docs_json: str, variant_json: str) -> Dict:
-    """Perplexity scores for a set of documents + optional variant document."""
+@st.cache_data(show_spinner="Scoring documents...")
+def cached_scores(
+    docs_json: str,
+    variant_json: str,
+    detector_kind: str,
+    window_size: int,
+    provider: str,
+    api_key: str,
+) -> Dict:
+    """Detector scores for a set of documents + optional variant document."""
     try:
-        detector = load_detector()
         docs = json.loads(docs_json)
+        if detector_kind.startswith("Known-answer"):
+            detector = KnownAnswerDetector(llm_call=make_llm(provider, api_key))
+        elif detector_kind.startswith("PPL-W"):
+            detector = PerplexityWindowedDetector(window_size=window_size)
+        else:
+            detector = PerplexityDetector()
         benign = [
             (item[0], float(detector.score(ToolDocument(item[0], item[1]))))
             for item in docs
@@ -735,16 +759,32 @@ def _render_records(bundle: dict) -> None:
 def render_detection_tab() -> None:
     st.subheader("Detection")
     st.caption(
-        "PerplexityDetector (gpt2): documents with unusual descriptions "
-        "tend to receive higher mean token NLL. Calibration set = current "
-        "library; the optional variant document comes from the Run "
-        "Benchmark tab."
+        "Detectors mirror the paper's detection-based defenses: PPL and "
+        "PPL-W use a local gpt2 (one-time download), known-answer uses the "
+        "sidebar LLM backend. Calibration set = current library; the "
+        "optional variant document comes from the Run Benchmark tab."
     )
 
     benign_docs = _library_from_session().documents
     if not benign_docs:
         st.info("Add tools in the Tool Library tab first.")
         return
+
+    col1, col2 = st.columns([2, 1])
+    with col1:
+        detector_kind = st.selectbox("Detector", DETECTOR_KINDS, key="detector_kind")
+    with col2:
+        window_size = 5
+        if detector_kind.startswith("PPL-W"):
+            window_size = int(
+                st.slider(
+                    "Window size (tokens)",
+                    min_value=2,
+                    max_value=20,
+                    value=5,
+                    key="detector_window",
+                )
+            )
 
     inject_variant = st.session_state.get("inject_variant", False)
     variant_doc = None
@@ -758,6 +798,7 @@ def render_detection_tab() -> None:
             st.error(f"Invalid variant document: {exc}")
             return
 
+    provider, api_key = st.session_state.llm_call_args
     fingerprint = (
         _docs_json(st.session_state.library_docs),
         json.dumps(
@@ -765,21 +806,26 @@ def render_detection_tab() -> None:
             if variant_doc
             else []
         ),
+        detector_kind,
+        window_size,
+        provider,
+        api_key,
     )
     stored = st.session_state.detection
     stale = stored is None or stored.get("fingerprint") != fingerprint
 
-    if st.button("Run PerplexityDetector", key="run_detector"):
-        with st.spinner(
-            "Scoring documents with gpt2 "
-            "(first run downloads the model)..."
-        ):
-            payload = cached_scores(fingerprint[0], fingerprint[1])
-        if "error" in payload:
-            st.warning(
-                f"PerplexityDetector unavailable: {payload['error']} "
-                "The gpt2 model requires a one-time download."
+    if st.button("Run detector", key="run_detector"):
+        with st.spinner("Scoring documents (first gpt2 use downloads the model)..."):
+            payload = cached_scores(
+                fingerprint[0],
+                fingerprint[1],
+                detector_kind,
+                window_size,
+                provider,
+                api_key,
             )
+        if "error" in payload:
+            st.warning(f"Detector unavailable: {payload['error']}")
         else:
             st.session_state.detection = {
                 "fingerprint": fingerprint,
@@ -791,15 +837,15 @@ def render_detection_tab() -> None:
 
     if stored is None:
         st.info(
-            "Click 'Run PerplexityDetector' to score the current library. "
-            "The gpt2 model is downloaded on first use."
+            "Click 'Run detector' to score the current library with the "
+            "selected detector."
         )
         return
 
     if stale:
         st.info(
-            "Library or variant changed since the last scoring; click "
-            "'Run PerplexityDetector' to recompute."
+            "Library, variant, or detector settings changed since the last "
+            "scoring; click 'Run detector' to recompute."
         )
         return
 
@@ -811,7 +857,7 @@ def render_detection_tab() -> None:
     fig = px.histogram(
         x=benign_scores,
         nbins=min(20, len(benign_scores)),
-        labels={"x": "Mean token NLL (lower = more typical)"},
+        labels={"x": "Detector score (higher = more suspicious)"},
         title="Benign calibration scores",
     )
     if variant_score is not None:

@@ -272,6 +272,11 @@ def _init_state() -> None:
             st.session_state[key] = value
     if st.session_state.library_docs is None:
         st.session_state.library_docs = _default_library_docs()
+    # Seed the benchmark text area widget state (single source of truth;
+    # set before any widget is instantiated so it is allowed).
+    st.session_state.setdefault(
+        "bench_queries", "\n".join(st.session_state.queries)
+    )
 
 
 def _docs_json(docs: List[Dict[str, str]]) -> str:
@@ -528,10 +533,32 @@ class _TickSelector:
         return self.inner.select(query, candidates)
 
 
+def _on_generate_queries() -> None:
+    """Callback for the query auto-generation button.
+
+    Runs before the script rerun, so it may update the text area's widget
+    state (which is forbidden mid-run once the widget is instantiated).
+    """
+    target = st.session_state.get("gen_task", "").strip()
+    num = int(st.session_state.get("gen_queries", 10))
+    if not target:
+        st.session_state.gen_error = "Describe the target task first."
+        return
+    try:
+        generated = generate_task_descriptions(
+            target, num, current_llm_call()
+        )
+    except Exception as exc:
+        st.session_state.gen_error = f"Generation failed: {exc}"
+        return
+    st.session_state.queries = generated
+    st.session_state.bench_queries = "\n".join(generated)
+    st.session_state.gen_error = None
+
+
 def render_benchmark_tab() -> None:
     st.subheader("Run Benchmark")
     provider, _ = st.session_state.llm_call_args
-
     st.markdown("**Configuration**")
     col1, col2, col3 = st.columns(3)
     with col1:
@@ -547,32 +574,24 @@ def render_benchmark_tab() -> None:
     with query_col:
         queries_text = st.text_area(
             "One query per line",
-            value="\n".join(st.session_state.queries),
             key="bench_queries",
             placeholder="What is the weather in Paris today?",
         )
     with gen_col:
         st.markdown("**Auto-generate queries**")
-        target_task = st.text_input(
+        st.text_input(
             "Target task", key="gen_task", placeholder="checking the weather"
         )
-        num_queries = st.number_input(
+        st.number_input(
             "How many", min_value=1, max_value=30, value=10, key="gen_queries"
         )
-        if st.button("Generate queries", key="gen_queries_button"):
-            if not target_task.strip():
-                st.error("Describe the target task first.")
-            else:
-                try:
-                    with st.spinner("Generating queries..."):
-                        generated = generate_task_descriptions(
-                            target_task.strip(), int(num_queries), current_llm_call()
-                        )
-                except Exception as exc:
-                    st.error(f"Generation failed: {exc}")
-                else:
-                    st.session_state.queries = generated
-                    st.rerun()
+        st.button(
+            "Generate queries",
+            key="gen_queries_button",
+            on_click=_on_generate_queries,
+        )
+        if st.session_state.get("gen_error"):
+            st.error(st.session_state.gen_error)
 
     names = [d["tool_name"] for d in st.session_state.library_docs]
     current_expected = st.session_state.get("bench_expected")

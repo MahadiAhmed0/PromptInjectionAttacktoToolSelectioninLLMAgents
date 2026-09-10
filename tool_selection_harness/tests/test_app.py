@@ -85,6 +85,26 @@ def test_app_generate_tools_with_mock() -> None:
     assert "18" in metrics
 
 
+def test_app_auto_generate_queries() -> None:
+    """Regression: auto-generated queries appear in the benchmark text area."""
+    at = AppTest.from_file(str(APP), default_timeout=180)
+    at.run()
+    assert not at.exception
+
+    text_inputs = {t.label: t for t in at.text_input}
+    text_inputs["Target task"].set_value("checking the weather")
+    at.run()
+    assert not at.exception
+
+    buttons = {b.label: b for b in at.button}
+    buttons["Generate queries"].click()
+    at.run()
+    assert not at.exception
+
+    text_areas = {ta.label: ta for ta in at.text_area}
+    assert "checking the weather" in text_areas["One query per line"].value
+
+
 def test_app_detection_run_without_variant() -> None:
     """Regression: run a detector with no variant document set (offline)."""
     at = AppTest.from_file(str(APP), default_timeout=180)

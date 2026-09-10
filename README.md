@@ -81,6 +81,36 @@ The LLM provider is chosen in the sidebar (Anthropic / OpenAI / mock); all
 calls go through the same pluggable `selector.py` / `generators.py`
 interfaces, so the UI never hardcodes a provider.
 
+## Alignment with the research paper
+
+This project reproduces the framework of *Prompt Injection Attack to Tool
+Selection in LLM Agents* (Shi et al., NDSS 2026 — `Related Papers/`) inside
+a controlled, defensive evaluation environment:
+
+| Paper element | Module |
+| --- | --- |
+| Two-step tool selection (retrieval -> selection) | `core/retriever.py`, `core/selector.py` |
+| Selection prompt structure (Fig. 2) | `core/selector.py` (`PROMPT_TEMPLATE`) |
+| Metrics ACC / ASR / HR@k / AHR@k | `core/metrics.py` (`accuracy`, `target_selection_rate`, `hit_rate_at_k`, `target_retrieval_rate`) |
+| Manual attack baselines (naive, escape, context ignore, fake completion, combined) | `core/attacks.py` (`manual_attack_documents`) |
+| ToolHijacker gradient-free (R generation + S tree search, Algorithm 1) | `core/attacks.py` (`toolhijacker_gradient_free`) |
+| ToolHijacker gradient-based (L1/L2/L3 losses, GCG-style S + HotFlip-style R) | `core/attacks.py` (`GradientSelectionOptimizer`, `GradientRetrievalOptimizer`) |
+| PPL / PPL-W / known-answer detection | `core/defenses.py` |
+| Dataset-adaptive thresholding + FNR/FPR/AUC (Table X) | `core/defenses.py`, `core/detection_metrics.py` (`evaluate_detector`, `detection_auc`) |
+| Query / tool-document generation prompts (Fig. 10/11) | `core/generators.py` |
+
+End-to-end reproduction script:
+
+```
+python examples/run_toolhijacker.py --offline            # mocks, no downloads
+python examples/run_toolhijacker.py --gradient-based     # + gpt2/MiniLM optimization
+```
+
+The gradient-based components are verified with unit-test stubs; real runs
+download local models. **Ethics note:** attack-side code targets the
+synthetic benchmark library only, mirroring the paper's ethics section —
+do not point it at real agents or production tool registries.
+
 ## Quick start
 
 ```

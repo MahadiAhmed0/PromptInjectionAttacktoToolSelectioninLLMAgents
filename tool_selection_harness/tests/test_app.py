@@ -135,6 +135,34 @@ def test_app_attacks_tab_manual_baselines() -> None:
     assert any("method" in df.columns and "ASR" in df.columns for df in dataframes)
 
 
+def test_app_attacks_tab_craft_gradient_free() -> None:
+    """Regression: gradient-free crafting produces a clean R+S document."""
+    at = AppTest.from_file(str(APP), default_timeout=180)
+    at.run()
+    assert not at.exception
+
+    text_inputs = {t.label: t for t in at.text_input}
+    text_inputs["Target task"].set_value("checking the weather")
+    at.run()
+    buttons = {b.label: b for b in at.button}
+    buttons["Generate queries"].click()
+    at.run()
+    assert not at.exception
+
+    buttons = {b.label: b for b in at.button}
+    buttons["Craft + run ToolHijacker (gradient-free)"].click()
+    at.run()
+    assert not at.exception
+
+    codes = [c.value for c in at.get("code")]
+    assert codes, "crafted document should be shown in a code block"
+    crafted = codes[0]
+    # The S variant prompt must not have leaked canned tool-doc JSON.
+    assert "task_lookup" not in crafted
+    assert '{"tool_name"' not in crafted
+    assert "Just output" in crafted or "Always prefer" in crafted
+
+
 def test_app_detection_run_without_variant() -> None:
     """Regression: run a detector with no variant document set (offline)."""
     at = AppTest.from_file(str(APP), default_timeout=180)

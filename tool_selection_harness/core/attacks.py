@@ -344,12 +344,14 @@ class GradientSelectionOptimizer:
         iterations: int = 50,
         top_k: int = 64,
         batch_size: int = 128,
+        progress_cb: Optional[Callable[[int, int], None]] = None,
     ) -> str:
         """Optimize the ``suffix`` within ``prompt_text``; returns it.
 
         The suffix span may appear anywhere in the prompt (e.g., inside a
         tool document followed by trailer instructions); it is located by
-        token-span search.
+        token-span search. ``progress_cb``, if given, is invoked with
+        ``(iteration, total_iterations)`` for progress reporting.
         """
         torch = _torch()
         _, model = self._load()
@@ -384,7 +386,9 @@ class GradientSelectionOptimizer:
         current_loss = float(loss_of(current).detach().item())
         embedding_weight = model.get_input_embeddings().weight.detach()
 
-        for _ in range(iterations):
+        for iteration in range(iterations):
+            if progress_cb is not None:
+                progress_cb(iteration + 1, iterations)
             loss, embeddings = selection_total_loss(
                 model,
                 None,

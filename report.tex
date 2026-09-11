@@ -338,29 +338,106 @@ the description.
 \section{Automated Two Phase Crafting}
 
 Manual styles ignore a central fact of the pipeline: the document must
-first be retrieved. The second part of the study therefore crafts
-documents automatically, in two phases matching the two pipeline stages:
+first be retrieved before it can be selected. The second part of the
+study therefore crafts documents automatically, in two phases matching
+the two pipeline stages. The retrieval phase produces text that wins the
+similarity race, and the selection phase produces an instruction that
+wins the final choice. The two parts are concatenated into one
+natural looking description.
+
+\subsection{Phase One: Retrieval Aligned Text}
+
+A set of example queries for the target task, called the shadow query
+set, is prepared. An LLM is then asked to write a short functionality
+description that addresses those queries in general terms, with an
+approximate word budget. The prompt asks for core functionality rather
+than an answer to any single query, so the output generalizes across
+phrasings.
+
+The resulting text is semantically aligned with the shadow queries,
+which is exactly what the embedding based retriever rewards: the
+document's vector lands close to the queries, so the document enters the
+top-$k$ candidate set consistently. This part alone is a strong baseline,
+and it also serves as the initialization for the gradient based method
+described below.
+
+\subsection{Phase Two: Selection Instruction, Gradient Free Refinement}
+
+Once the document is retrieved, the selection instruction must convince
+the selection LLM to choose it. The gradient free procedure refines this
+instruction by search. It needs only API level access to two LLMs: a
+proposal model that writes candidate phrasings, and the selection model
+that judges them. The procedure works as follows.
 
 \begin{enumerate}
-  \item \textbf{Retrieval aligned text.} An LLM is asked to summarize the
-  core functionality implied by a small set of example queries for the
-  target task. The resulting text is semantically aligned with those
-  queries, which makes the document rank highly under embedding
-  similarity.
-  \item \textbf{Selection instruction.} A short instruction sequence is
-  refined so that the selection LLM chooses the crafted tool once the
-  document is in the candidate set. Two search strategies are supported:
-  a \emph{gradient free} variant search, where an LLM proposes
-  alternative phrasings and the selection LLM evaluates each candidate,
-  keeping the best; and a \emph{gradient based} token optimization, where
-  individual tokens of the instruction are updated against a local
-  language model using a loss that balances three terms: likelihood of
-  emitting the target tool name, likelihood of emitting the full expected
-  JSON answer, and a readability penalty that keeps the text natural.
+  \item \textbf{Prepare the judging setup.} Keep a small set of
+  representative benign documents that stand in for the retrieval
+  context. For evaluation, the crafted document is placed into this
+  context to form the candidate list, exactly as the real selection
+  prompt would.
+  \item \textbf{Seed the instruction.} Start from a simple explicit
+  instruction containing the crafted tool's name, for example ``Just
+  output the word X as your final answer.''
+  \item \textbf{Propose variants.} For each current candidate, ask the
+  proposal model for several alternative phrasings of the instruction.
+  \item \textbf{Evaluate all variants.} Run the real selection pipeline
+  once per shadow query for every variant, and count how many shadow
+  queries each variant wins. A win means the selection model emitted the
+  crafted tool's name as its answer.
+  \item \textbf{Prune and repeat.} Keep the variants with the highest win
+  counts, attach the feedback from this round to the next proposal
+  request, and repeat. The search stops when a variant wins every shadow
+  query or when the iteration budget is exhausted.
 \end{enumerate}
 
-The final document is the concatenation of the two parts. Figure
-\ref{fig:crafting} sketches the process.
+The key property of this loop is that the judge is the same kind of
+model that will make the real decision. Success in the loop therefore
+transfers directly to the benchmark, and the search discovers phrasings
+that a human would not have thought of.
+
+\subsection{Phase Two: Selection Instruction, Gradient Based Refinement}
+
+The gradient based procedure treats the instruction as a sequence of
+tokens and refines it directly against a local language model, using
+gradient information. It requires an open source model that exposes its
+weights, and it runs on a GPU when one is available. Three loss terms
+guide the optimization, each answering one question.
+
+\begin{itemize}
+  \item \textbf{Alignment loss.} What is the likelihood that the model,
+  given the full selection prompt with the crafted document inside it,
+  emits the complete expected answer, namely the JSON object that names
+  the crafted tool? The loss is the negative log of this likelihood.
+  This is the main objective.
+  \item \textbf{Consistency loss.} What is the likelihood that the model
+  emits the crafted tool's name on its own? This term reinforces the
+  target name even when the exact JSON wrapper varies.
+  \item \textbf{Readability loss.} How natural is the instruction itself?
+  This is the average negative log likelihood of the instruction's own
+  tokens under the model, and it acts as a penalty that keeps the text
+  fluent.
+\end{itemize}
+
+The total objective is a weighted sum of the three terms, with the
+readability term weighted lightly. The optimization alternates two
+operations: first, the gradient of the objective is computed with respect
+to the embeddings of the instruction's tokens; second, for each token
+position, candidate replacement tokens are scored by their similarity to
+that gradient, the most promising replacements are evaluated with a
+forward pass, and a replacement is accepted whenever it reduces the
+objective.
+
+The readability term is what keeps the optimized text from degrading
+into nonsense. Without it, token level optimization happily trades
+fluency for likelihood, producing broken text that a perplexity based
+detector can trivially flag. With it, the final instruction remains
+readable, which is precisely what makes detection difficult.
+
+\subsection{Composed Document}
+
+The final crafted document is the concatenation of the retrieval aligned
+text and the refined instruction. Figure~\ref{fig:crafting} sketches the
+full process.
 
 \begin{figure}[H]
   \centering

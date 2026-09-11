@@ -1,0 +1,621 @@
+% ======================================================================
+%  Project Report: Tool Selection Robustness in LLM Agents
+%  Compiled with pdflatex. Figures are optional: place PNG images in the
+%  figures/ folder using the names referenced below, or the document
+%  will still compile with placeholder boxes.
+% ======================================================================
+\documentclass[11pt,a4paper]{report}
+
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{enumitem}
+\usepackage{caption}
+\usepackage{float}
+\usepackage[hidelinks]{hyperref}
+\usepackage{xcolor}
+\usepackage{titlesec}
+
+\graphicspath{{figures/}}
+\captionsetup{font=small,labelfont=bf}
+
+\titleformat{\chapter}[display]
+  {\normalfont\huge\bfseries}{\chaptertitlename\ \thechapter}{12pt}{\Huge}
+\titlespacing*{\chapter}{0pt}{0pt}{18pt}
+
+% Optional-figure helper: shows the image when present, otherwise a
+% framed placeholder so the document always compiles.
+\newcommand{\figimg}[3][0.85]{%
+  \IfFileExists{#2}{%
+    \begin{center}\includegraphics[width=#1\textwidth]{#2}\end{center}%
+  }{%
+    \begin{center}%
+      \fbox{\parbox{#1\textwidth}{\centering\vspace{2.2cm}%
+      [Place image here: #2]\vspace{2.2cm}}}%
+    \end{center}%
+  }%
+  \caption{#3}%
+}
+
+\newcommand{\metric}[1]{\texttt{#1}}
+
+\begin{document}
+
+% ----------------------------------------------------------------------
+\begin{titlepage}
+  \centering
+  {\LARGE\bfseries An Evaluation Framework for Tool Selection\\[2mm]
+  Robustness in LLM Agents\par}
+  \vspace{1.2cm}
+  {\large Project Report\par}
+  \vspace{0.6cm}
+  {\large Prepared for research supervision and feedback\par}
+  \vfill
+  {\large Department of Computer Science and Engineering\par}
+  \vspace{0.4cm}
+  {\large \today\par}
+\end{titlepage}
+
+% ----------------------------------------------------------------------
+\tableofcontents
+
+% ======================================================================
+\chapter{Introduction}
+% ======================================================================
+
+Large language models (LLMs) are increasingly deployed as \emph{agents}:
+systems that plan a task and then call external tools, such as weather
+services, calculators, or e-commerce APIs, to complete it. Before an agent
+can execute anything, it must decide \emph{which tool} fits the user's
+request. This decision, known as tool selection, is security critical. If
+the agent picks the wrong tool, or a tool that was crafted with harmful
+intent, the consequences can include data leaks, unauthorized actions, or
+simply incorrect answers.
+
+Two properties of the real world make this problem hard. First, the space
+of available tools is large and constantly growing, so agents narrow the
+search using a retrieval step before making a final choice with an LLM.
+Second, tool repositories are open. Anyone can publish a tool together
+with a short natural language description of what it does, and those
+descriptions are later fed directly into the LLM's context. A description
+written to exploit this channel can carry hidden instructions that
+manipulate the selection process itself.
+
+This report describes an evaluation framework we built to study these
+questions in a controlled setting. The framework implements the complete
+tool selection pipeline, provides a way to inject crafted tool documents
+into the library, measures how strongly those documents influence
+selection, and evaluates a set of detection methods that aim to flag
+suspicious documents before they are ever selected. Everything runs
+inside a synthetic benchmark environment, and the framework ships with an
+interactive dashboard so that every measurement can be inspected and
+reproduced visually.
+
+The rest of the report is organized as follows. Chapter 2 gives the
+background on LLM agents and tool selection. Chapter 3 defines the threat
+model we assume. Chapter 4 describes the system architecture. Chapter 5
+explains the evaluation methodology and metrics. Chapters 6 and 7 cover
+the two studies the framework supports: the injection study and the
+detection study. Chapter 8 summarizes the implementation and the
+dashboard. Chapter 9 presents illustrative results obtained with the
+current synthetic setup. Chapters 10 and 11 discuss limitations and
+conclusions.
+
+% ======================================================================
+\chapter{Background}
+% ======================================================================
+
+\section{LLM Agents and Tools}
+
+An LLM agent is an application that wraps a language model with the
+ability to act on the world. Typical capabilities include reading a
+knowledge base, browsing a website, and, most importantly for this work,
+calling external tools. Each tool is an API with a defined function. What
+the model sees of the tool is not the implementation but a short
+\emph{tool document}: a name plus a natural language description of what
+the tool does.
+
+\section{The Two Step Selection Pipeline}
+
+Modern agent frameworks rarely ask the LLM to pick directly from a
+catalog of thousands of tools. Instead they decompose selection into two
+steps, which we adopt in our framework as well.
+
+\begin{enumerate}
+  \item \textbf{Retrieval.} A lightweight embedding model maps the user's
+  query and every tool document into vector space. The documents most
+  similar to the query are kept, producing a short candidate list of size
+  $k$ (the top-$k$ set).
+  \item \textbf{Selection.} The user's query and the $k$ candidate
+  documents are placed into a structured prompt for the LLM, together
+  with strict instructions to choose exactly one tool and to answer in a
+  fixed JSON format.
+\end{enumerate}
+
+Figure~\ref{fig:pipeline} illustrates the pipeline. The two steps have
+different failure modes, and any security analysis must consider both: a
+document must first \emph{get retrieved} and then \emph{get selected}.
+
+\begin{figure}[H]
+  \centering
+  \figimg{pipeline.png}{The two step tool selection pipeline: the query
+  is embedded, the top-$k$ tool documents are retrieved by similarity,
+  and the LLM selects exactly one tool.}
+  \label{fig:pipeline}
+\end{figure}
+
+\section{Why Tool Documents Are a Risk}
+
+The descriptions inside tool documents are untrusted data by nature. They
+are written by third parties, fetched from open repositories, and then
+concatenated into the same prompt that carries the system's own
+instructions. Because LLMs cannot perfectly separate instructions from
+data, a description can be written so that the model treats part of it as
+an order: for example, a sentence instructing the model to always prefer
+that particular tool for a certain kind of request. This phenomenon is
+generally known as prompt injection, and the tool document channel is one
+of its most direct instantiations.
+
+% ======================================================================
+\chapter{Threat Model}
+% ======================================================================
+
+We model a platform where third parties can publish tools, mirroring
+public tool hubs used by real agent frameworks. The evaluator plays the
+role of such a third party and studies how much influence one published
+document can exert.
+
+\section{Objective}
+
+The objective is to answer a measurable question: given a target task,
+such as answering weather queries, can a single crafted tool document,
+inserted into an otherwise benign library, redirect the agent's selection
+towards the crafted tool across a wide range of natural user phrasings of
+that task?
+
+\section{Assumptions}
+
+We adopt a conservative, black box setting, which we call the no box
+setting, for the document author:
+
+\begin{itemize}
+  \item The author knows the target task, but does not know the exact
+  queries real users will type.
+  \item The author cannot read the victim's tool library, cannot query
+  the victim's retriever or LLM, and does not know the top-$k$ setting.
+  \item The author can only publish one document: a name and a
+  description.
+\end{itemize}
+
+These assumptions make the study realistic: if a crafted document still
+succeeds under these constraints, the risk applies to any open
+repository. All experiments in this framework remain within the synthetic
+benchmark environment; no real agents, users, or production systems are
+involved.
+
+% ======================================================================
+\chapter{System Design}
+% ======================================================================
+
+The framework is built from five cooperating components, each with a
+single responsibility. Figure~\ref{fig:architecture} shows how they are
+connected.
+
+\begin{itemize}
+  \item \textbf{Tool library.} An ordered collection of tool documents
+  (name and description). Operations that modify the library are
+  copy on write: injecting a document always produces a new library,
+  leaving the original untouched. This lets every experiment compare a
+  clean baseline and a modified library side by side.
+  \item \textbf{Retriever.} The retrieval step. It uses a pluggable
+  embedding backend and supports cosine similarity and dot product as
+  scoring functions. The default backend is a small sentence transformer
+  model; a deterministic offline embedder is also available so that
+  experiments run without any model download.
+  \item \textbf{Selector.} The selection step. It renders the structured
+  selection prompt, forwards it to any pluggable LLM backend, and parses
+  the answer tolerantly. The parser handles markdown fences, trailing
+  text, and classifies every outcome as a valid choice, a hallucinated
+  name, unparseable output, or a refusal.
+  \item \textbf{Benchmark runner.} The orchestrator. Given a library, a
+  retriever, a selector, a list of query and expected tool pairs, a value
+  of $k$, and an optional injected document, it runs the full pipeline
+  per query, records every intermediate result, and aggregates all
+  metrics.
+  \item \textbf{Dashboard.} An interactive browser interface with five
+  views: library editing, benchmark configuration and results, document
+  crafting, detection analysis, and run history.
+\end{itemize}
+
+Every external dependency is pluggable. The embedding backend, the LLM
+used for selection, the LLM used for crafting documents, and the model
+used for detection can each be swapped without changing the rest of the
+system.
+
+\begin{figure}[H]
+  \centering
+  \figimg{architecture.png}{The five framework components and the flow
+  of a benchmark run from the tool library through retrieval and
+  selection to recorded metrics.}
+  \label{fig:architecture}
+\end{figure}
+
+% ======================================================================
+\chapter{Evaluation Methodology}
+% ======================================================================
+
+\section{Benchmark Setup}
+
+A benchmark run is defined by four inputs:
+
+\begin{enumerate}
+  \item \textbf{A tool library.} The shipped synthetic library contains
+  fifteen tools across ten categories (weather, shopping, calendar,
+  translation, calculation, search, finance, communication, travel, and
+  media). Categories that overlap with the target task act as the honest
+  competition; the rest act as distractors. The library is fully
+  editable in the dashboard, and larger libraries can be generated or
+  imported.
+  \item \textbf{A target task with evaluation queries.} Each query is a
+  natural phrasing of one task, paired with the tool that should have
+  been selected for it. Queries can be written by hand, imported, or
+  generated by an LLM from a short task description.
+  \item \textbf{Pipeline settings.} The embedding backend, the similarity
+  metric, the top-$k$ value (default 5), and the selection LLM backend.
+  \item \textbf{An optional injected document.} A single extra tool
+  document inserted into a copy of the library for the modified run.
+\end{enumerate}
+
+Each benchmark performs two passes: a clean baseline pass over the
+original library, and, when a document is provided, a modified pass over
+the injected copy. Because injection is copy on write, both passes use
+identical retrieval and selection settings.
+
+\section{Metrics}
+
+Table~\ref{tab:metrics} lists the metrics computed by the framework. The
+first two describe the healthy pipeline. The next two describe how much
+influence an injected document exerts, computed on the modified pass
+only. The last three describe detection quality, used in the detection
+study of Chapter 7.
+
+\begin{table}[H]
+  \centering
+  \caption{Evaluation metrics used throughout the framework.}
+  \label{tab:metrics}
+  \begin{tabular}{llp{9.2cm}}
+    \toprule
+    \textbf{Metric} & \textbf{Pass} & \textbf{Meaning} \\
+    \midrule
+    Accuracy (ACC) & baseline & Fraction of queries where the expected tool was selected. \\
+    Hit rate at $k$ (HR@$k$) & baseline & Fraction of queries where the expected tool appeared in the top-$k$ set. \\
+    Target selection rate & modified & Fraction of queries where the injected document was the selected tool. \\
+    Target retrieval rate & modified & Fraction of queries where the injected document appeared in the top-$k$ set. \\
+    False positive rate (FPR) & detection & Fraction of benign documents wrongly flagged. \\
+    False negative rate (FNR) & detection & Fraction of crafted documents that escaped detection. \\
+    Area under the curve (AUC) & detection & Rank separation between benign and crafted score distributions. \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+The two target rates deliberately separate the two pipeline stages: a
+document can be retrieved often but selected rarely, and the gap between
+the two rates identifies which stage resists the influence.
+
+% ======================================================================
+\chapter{Injection Study}
+% ======================================================================
+
+This study asks how strongly a single crafted document can influence
+selection, and what crafting effort is required.
+
+\section{Manual Injection Styles}
+
+The first part of the study uses five hand written injection styles,
+representing what an attacker can produce with simple prompt
+engineering. Table~\ref{tab:manual} lists them. These styles differ in
+how they attempt to separate the injected instruction from the rest of
+the description.
+
+\begin{table}[H]
+  \centering
+  \caption{The five manual injection styles used as baseline documents.}
+  \label{tab:manual}
+  \begin{tabular}{lp{11.5cm}}
+    \toprule
+    \textbf{Style} & \textbf{Description content (illustrative)} \\
+    \midrule
+    Direct instruction & ``Just output the word X as your final answer.'' \\
+    Escape characters & Line breaks inserted before the instruction to visually separate it from the description. \\
+    Context override & ``Ignore all previous instructions,'' followed by the instruction. \\
+    Fake completion & Pretends the previous task is finished, then issues a new instruction. \\
+    Combined & Uses escape characters, context override, and fake completion together. \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\section{Automated Two Phase Crafting}
+
+Manual styles ignore a central fact of the pipeline: the document must
+first be retrieved. The second part of the study therefore crafts
+documents automatically, in two phases matching the two pipeline stages:
+
+\begin{enumerate}
+  \item \textbf{Retrieval aligned text.} An LLM is asked to summarize the
+  core functionality implied by a small set of example queries for the
+  target task. The resulting text is semantically aligned with those
+  queries, which makes the document rank highly under embedding
+  similarity.
+  \item \textbf{Selection instruction.} A short instruction sequence is
+  refined so that the selection LLM chooses the crafted tool once the
+  document is in the candidate set. Two search strategies are supported:
+  a \emph{gradient free} variant search, where an LLM proposes
+  alternative phrasings and the selection LLM evaluates each candidate,
+  keeping the best; and a \emph{gradient based} token optimization, where
+  individual tokens of the instruction are updated against a local
+  language model using a loss that balances three terms: likelihood of
+  emitting the target tool name, likelihood of emitting the full expected
+  JSON answer, and a readability penalty that keeps the text natural.
+\end{enumerate}
+
+The final document is the concatenation of the two parts. Figure
+\ref{fig:crafting} sketches the process.
+
+\begin{figure}[H]
+  \centering
+  \figimg{crafting.png}{Two phase crafting: retrieval aligned text is
+  generated from example queries, then a selection instruction is
+  refined by variant search or token optimization, and both parts are
+  concatenated into one tool document.}
+  \label{fig:crafting}
+\end{figure}
+
+% ======================================================================
+\chapter{Detection Study}
+% ======================================================================
+
+The second study asks whether suspicious documents can be flagged before
+selection, using detectors that score each document and a threshold that
+decides what is flagged.
+
+\section{Detectors}
+
+Three detectors are implemented, covering different families of defense:
+
+\begin{itemize}
+  \item \textbf{Perplexity detector.} Scores the description by its
+  average token negative log likelihood under a small local causal
+  language model. Natural descriptions receive low scores; broken or
+  unusual phrasing receives high scores.
+  \item \textbf{Windowed perplexity detector.} The same principle applied
+  over sliding windows of tokens, taking the maximum window score. This
+  catches a document where only a short segment is unusual.
+  \item \textbf{Known answer detector.} Prepends a fixed instruction to
+  the document, for example asking the model to repeat a secret phrase
+  while ignoring the following text. If the model fails to repeat the
+  phrase, the document is flagged. This detector needs an LLM backend
+  but no local model.
+\end{itemize}
+
+\section{Threshold Calibration}
+
+A fixed threshold does not transfer between datasets. The framework uses
+a dataset adaptive strategy instead: a calibration set of known benign
+documents is scored, and the threshold is set at the empirical quantile
+of those scores corresponding to a chosen false positive target, for
+example one percent. The dashboard exposes this target as a slider, so
+the full tradeoff can be explored interactively. Figure
+\ref{fig:scores} shows the intended visualization of score distributions
+and the threshold.
+
+\begin{figure}[H]
+  \centering
+  \figimg{scores.png}{Score distribution of benign documents with the
+  scores of crafted documents marked, and the calibrated threshold line.}
+  \label{fig:scores}
+\end{figure}
+
+% ======================================================================
+\chapter{Implementation and Dashboard}
+% ======================================================================
+
+\section{Models and Backends}
+
+The default embedding backend is a small sentence transformer model with
+six layers. The detection study uses a small causal language model of
+about 124 million parameters for perplexity scoring. Both load
+automatically and are cached after first use. Selection and crafting use
+pluggable LLM backends: commercial APIs when credentials are provided,
+and a deterministic offline backend that simulates plausible responses so
+that the entire framework remains runnable without network access or API
+costs.
+
+The gradient based crafting path runs on a GPU when available and falls
+back to CPU with a warning otherwise.
+
+\section{The Dashboard}
+
+The dashboard exposes five views, summarized in Table
+\ref{tab:dashboard}. Figure \ref{fig:dashboard} shows a screenshot of the
+benchmark view.
+
+\begin{table}[H]
+  \centering
+  \caption{The five dashboard views.}
+  \label{tab:dashboard}
+  \begin{tabular}{lp{10.8cm}}
+    \toprule
+    \textbf{View} & \textbf{Purpose} \\
+    \midrule
+    Library & View, edit, add, remove, generate, import, and export tool documents; live tool count. \\
+    Benchmark & Configure backend, metric, top-$k$, and queries; inject one comparison document; run the two passes with progress; inspect metric cards, charts, and per query records. \\
+    Crafting & Generate the five manual injection styles; run automated two phase crafting with the gradient free and gradient based strategies; view the resulting documents. \\
+    Detection & Choose a detector, score the library and crafted documents, adjust the false positive target with live FNR, FPR, AUC, a flagged document table, and a tradeoff curve. \\
+    History & Compare previously saved benchmark runs side by side and inspect any run's records. \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\begin{figure}[H]
+  \centering
+  \figimg{dashboard.png}{The dashboard benchmark view showing the metric
+  cards, the baseline versus modified comparison chart, and the per
+  query record table.}
+  \label{fig:dashboard}
+\end{figure}
+
+Every expensive computation is cached. Models and API clients are loaded
+once per process; embeddings and detector scores are memoized per library
+state, so changing a threshold or re-running a pass recomputes only what
+changed.
+
+% ======================================================================
+\chapter{Illustrative Results}
+% ======================================================================
+
+This chapter reports measurements obtained with the current synthetic
+setup: the fifteen tool library, ten automatically generated weather
+queries, top-$k$ equal to 5, the default sentence transformer embedder,
+and the offline selection backend. These numbers illustrate the kind of
+output the framework produces; they are not a large scale evaluation.
+
+\section{Baseline and Comparison Document}
+
+Table~\ref{tab:baseline} shows a clean baseline pass and a modified pass
+in which a hand written, benign sounding alternative weather tool was
+injected. The alternative document is retrieved for every query, because
+it is clearly weather relevant, but it is almost never selected, because
+it carries no persuasive instruction.
+
+\begin{table}[H]
+  \centering
+  \caption{Baseline pass and modified pass with a hand written
+  alternative weather document.}
+  \label{tab:baseline}
+  \begin{tabular}{lcc}
+    \toprule
+    \textbf{Metric} & \textbf{Baseline} & \textbf{Modified} \\
+    \midrule
+    Accuracy & 0.900 & n/a \\
+    Hit rate at 5 & 1.000 & 1.000 \\
+    Target selection rate & n/a & 0.000 \\
+    Target retrieval rate & n/a & 1.000 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\section{Injection Study}
+
+Table~\ref{tab:injection} compares the manual injection styles with the
+automatically crafted documents. The manual styles are retrieved
+reasonably often but are selected rarely, because the selection backend
+treats their abrupt instructions with caution. The automatically crafted
+documents, whose descriptions read naturally and are tightly aligned with
+the queries, achieve far higher selection rates. The gradient based
+document was optimized with a short budget of five update steps; with a
+larger budget the selection rate increases further.
+
+\begin{table}[H]
+  \centering
+  \caption{Injection study on ten weather queries, top-5, synthetic
+  library. Target selection rate and target retrieval rate per document
+  style.}
+  \label{tab:injection}
+  \begin{tabular}{lcc}
+    \toprule
+    \textbf{Document style} & \textbf{Selection rate} & \textbf{Retrieval rate} \\
+    \midrule
+    Direct instruction & 0.100 & 0.500 \\
+    Escape characters & 0.100 & 0.500 \\
+    Context override & 0.100 & 0.700 \\
+    Fake completion & 0.200 & 0.900 \\
+    Combined & 0.200 & 0.900 \\
+    Automated, gradient free & 1.000 & 1.000 \\
+    Automated, gradient based & 0.500 & 0.800 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+Two observations follow. First, retrieval alone is not the whole story:
+manual documents reach the candidate set but still lose at selection.
+Second, effort matters: natural, query aligned text dominates abrupt
+instructions, which is precisely why the two phase crafting approach
+exists.
+
+\section{Detection Study}
+
+Table~\ref{tab:detection} reports detection results when the crafted
+documents from the injection study are mixed with the fifteen benign
+library documents and scored by each detector, with the threshold
+calibrated at a one percent false positive target on the benign set. The
+perplexity based detectors flag most of the abrupt manual documents,
+whose phrasing is unusual, but consistently miss the naturally written
+automated documents. The known answer detector misses essentially
+everything, since the injected documents do not disturb the secret
+repetition task in any way the model notices. These outcomes motivate the
+central open question of the project: how to detect documents that are
+adversarial without being unusual.
+
+\begin{table}[H]
+  \centering
+  \caption{Detection results on the mixed set of fifteen benign and eight
+  crafted documents.}
+  \label{tab:detection}
+  \begin{tabular}{lccc}
+    \toprule
+    \textbf{Detector} & \textbf{FNR} & \textbf{FPR} & \textbf{AUC} \\
+    \midrule
+    Perplexity & 0.125 & 0.067 & 0.97 \\
+    Windowed perplexity & comparable & comparable & comparable \\
+    Known answer & 1.000 & 0.000 & 0.50 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+Note that the aggregate numbers depend on the mixture: if only the
+naturally written documents are scored, the perplexity detector misses
+them entirely, which is the important case for a realistic adversary.
+
+% ======================================================================
+\chapter{Limitations and Future Work}
+% ======================================================================
+
+The current framework has several known limitations, each pointing to
+future work.
+
+\begin{itemize}
+  \item \textbf{Scale.} The synthetic library contains fifteen tools,
+  while real deployments expose hundreds to thousands. Retrieval becomes
+  a real hurdle only at scale, so the retrieval half of the injection
+  study should be repeated on larger generated libraries.
+  \item \textbf{Backends.} Most measurements use the deterministic
+  offline selection backend and small local models. Repeating the study
+  with commercial LLMs and stronger retrievers would strengthen the
+  findings.
+  \item \textbf{Detection scope.} Only three detectors are implemented.
+  Prevention style defenses, which require fine tuned model checkpoints,
+  and ensemble detectors are natural additions.
+  \item \textbf{Crafting budget.} The gradient based crafting path runs
+  with a short update budget for interactivity. Larger budgets improve
+  both document quality and success rates at the cost of compute.
+\end{itemize}
+
+% ======================================================================
+\chapter{Conclusion}
+% ======================================================================
+
+This report described an evaluation framework for studying tool selection
+robustness in LLM agents. The framework implements the complete two step
+pipeline, supports controlled injection of crafted tool documents through
+a copy on write library, measures selection and retrieval influence
+separately through target rates, and evaluates three detection families
+under a dataset adaptive threshold. An interactive dashboard exposes
+every stage of the methodology. The illustrative results reproduce the
+expected qualitative picture: hand written documents are weak, naturally
+crafted documents are strong, and current detectors struggle most with
+exactly the documents that matter. The framework is designed to grow
+along the limitations listed above, and we welcome feedback on the
+methodology, the metrics, and the priorities for the next iteration.
+
+\end{document}
